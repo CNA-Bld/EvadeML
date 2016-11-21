@@ -1,10 +1,10 @@
-from common import *
 import pickle
 import random
 
 import pdfrw
+from common import *
 from pdfrw import PdfReader, PdfWriter
-from pdfrw.objects import PdfDict, PdfArray, PdfName, PdfObject, PdfIndirect
+from pdfrw.objects import PdfObject
 
 logger = logging.getLogger('gp.pdf_genome')
 
@@ -14,8 +14,12 @@ class PdfGenome:
         pass
 
     @staticmethod
-    def load_genome(pdf_file_path, pickleable = False):
-        pdf_obj = PdfReader(pdf_file_path, slow_parsing=False)
+    def load_genome(pdf_file_path, pickleable=False):
+        try:
+            pdf_obj = PdfReader(pdf_file_path, slow_parsing=True)
+        except:
+            print pdf_file_path
+            raise
 
         if pickleable:
             # Remove the dynamic contents to make it pickleable.
@@ -29,7 +33,7 @@ class PdfGenome:
         logger.debug("Saving to file: " + short_path_for_logging)
         y = PdfWriter()
         y.write(file_path, pdf_obj)
-        logger.debug("Done")
+        # logger.debug("Done")
 
     @staticmethod
     def load_trace(pdf_file_path):
@@ -42,8 +46,8 @@ class PdfGenome:
             return None
 
     @staticmethod
-    def load_external_genome(folder, pickleable = False):
-        ext_pdf_paths = [] # element: (entry, path)
+    def load_external_genome(folder, pickleable=False):
+        ext_pdf_paths = []  # element: (entry, path)
         for file_path in list_file_paths(folder):
             pdf_obj = PdfGenome.load_genome(file_path, pickleable)
             paths = PdfGenome.get_object_paths(pdf_obj)
@@ -52,51 +56,63 @@ class PdfGenome:
         return ext_pdf_paths
 
     @staticmethod
-    def get_object_paths(entry, exclude_paths = set()):
-        logger.debug("Fetch object paths from an entry.")
+    def dump_path(path):
+        new_path = []
+        for i in path:
+            new_path.append(str(i))
+        return tuple(new_path)
 
-        group_types = [pdfrw.pdfreader.PdfReader, pdfrw.objects.pdfdict.PdfDict, pdfrw.objects.pdfarray.PdfArray]
-        if entry.Root == None:
-            logger.warning("No /Root. in %s " % entry.keys())
-            entry.Root = pdfrw.objects.pdfdict.PdfDict()
-            return []
-        obj_queue = entry.Root.items() # queue for tree node traversal, (path, obj) pairs
+    @staticmethod
+    def get_object_paths(entry, exclude_paths=set()):
+        try:
+            # logger.debug("Fetch object paths from an entry.")
 
-        # Track the visited objs during traversal, actually only PdfArray and PdfDict
-        visited_objs_paths = {}
-        paths_collection = []
+            group_types = [pdfrw.pdfreader.PdfReader, pdfrw.objects.pdfdict.PdfDict, pdfrw.objects.pdfarray.PdfArray]
+            if entry.Root == None:
+                logger.warning("No /Root. in %s " % entry.keys())
+                entry.Root = pdfrw.objects.pdfdict.PdfDict()
+                return []
+            obj_queue = entry.Root.items()  # queue for tree node traversal, (path, obj) pairs
 
-        while len(obj_queue)>0:
-            (path, obj) = obj_queue.pop(0)
-            if type(path) != list:
-                path = ['/Root', path]
-            if pickle.dumps(path) in exclude_paths:
-                continue
-            if type(obj) not in group_types:
-                # Terminal nodes, no need to expand, so directly add to the returned list of paths.
-                paths_collection.append(path)
-            else:
-                # Non-terminal nodes. Need further traversal.
-                obj_id = id(obj)
-                if visited_objs_paths.has_key(obj_id):
-                    #paths_collection.append(path) # Why should we add a visited obj?
-                    visited_objs_paths[obj_id].append(path)
+            # Track the visited objs during traversal, actually only PdfArray and PdfDict
+            visited_objs_paths = {}
+            paths_collection = []
+
+            while len(obj_queue) > 0:
+                (path, obj) = obj_queue.pop(0)
+                if type(path) != list:
+                    path = ['/Root', path]
+                if PdfGenome.dump_path(path) in exclude_paths:
                     continue
-                visited_objs_paths[obj_id] = [path]
-                paths_collection.append(path)
-                
-                try:
-                    references = obj.keys()
-                except AttributeError:
-                    references = range(len(obj))
-                for reference in references:
-                    child_obj = obj[reference]
-                    new_path = path[:]
-                    new_path.append(reference)
-                    obj_queue.append((new_path, child_obj))
+                if type(obj) not in group_types:
+                    # Terminal nodes, no need to expand, so directly add to the returned list of paths.
+                    paths_collection.append(path)
+                else:
+                    # Non-terminal nodes. Need further traversal.
+                    obj_id = id(obj)
+                    if visited_objs_paths.has_key(obj_id):
+                        # paths_collection.append(path) # Why should we add a visited obj?
+                        visited_objs_paths[obj_id].append(path)
+                        continue
+                    visited_objs_paths[obj_id] = [path]
+                    paths_collection.append(path)
 
-        logger.debug("Fetch %d object paths." % len(paths_collection))
-        return paths_collection
+                    try:
+                        references = obj.keys()
+                    except AttributeError:
+                        references = range(len(obj))
+                    for reference in references:
+                        child_obj = obj[reference]
+                        new_path = path[:]
+                        new_path.append(reference)
+                        obj_queue.append((new_path, child_obj))
+
+            # logger.debug("Fetch %d object paths." % len(paths_collection))
+            return paths_collection
+        except KeyboardInterrupt:
+            print obj_queue[:10]
+            print exclude_paths
+            raise
 
     @staticmethod
     def get_parent_key(entry, path):
@@ -108,7 +124,7 @@ class PdfGenome:
 
     @staticmethod
     def delete(entry, path):
-        logger.debug("###delete %s" % (path))
+        # logger.debug("###delete %s" % (path))
         parent, key = PdfGenome.get_parent_key(entry, path)
         if isinstance(parent, list):
             if key >= len(parent):
@@ -133,7 +149,7 @@ class PdfGenome:
 
     @staticmethod
     def swap(src_entry, src_path, tgt_entry, tgt_path):
-        logger.debug("###swap %s and %s" % (str(src_path), str(tgt_path)))
+        # logger.debug("###swap %s and %s" % (str(src_path), str(tgt_path)))
 
         src_parent, src_key = PdfGenome.get_parent_key(src_entry, src_path)
         src_obj = src_parent[src_key]
@@ -147,8 +163,8 @@ class PdfGenome:
 
     @staticmethod
     def insert(src_entry, src_path, tgt_entry, tgt_path):
-        logger.debug("###insert %s after %s" % (str(tgt_path), str(src_path)))
-        
+        # logger.debug("###insert %s after %s" % (str(tgt_path), str(src_path)))
+
         src_parent, src_key = PdfGenome.get_parent_key(src_entry, src_path)
         src_obj = src_parent[src_key]
 
@@ -160,18 +176,19 @@ class PdfGenome:
             tgt_obj = deepcopy(tgt_obj)
 
         if isinstance(src_parent, list):
-            src_parent.insert(src_key+1, tgt_obj)
+            src_parent.insert(src_key + 1, tgt_obj)
+            return src_path[:-1] + [src_key + 1]
         elif isinstance(src_parent, dict):
             # Same: ['/Size'], [PdfObject("/Size")]
-            real_key = str(tgt_key) # it can be an integer.
+            real_key = str(tgt_key)  # it can be an integer.
             if "/" not in real_key:
-                real_key = PdfObject("/"+real_key)
+                real_key = "/" + real_key
+            real_key = PdfObject(real_key)
             src_parent[real_key] = tgt_obj
-        
-        return True
+            return src_path[:-1] + [real_key]
 
     @staticmethod
-    def mutation(entry, mut_prob, ext_genome, clone = False):
+    def mutation(entry, mut_prob, ext_genome, clone=False, max_mut=1024):
         if not entry:
             return False
         if clone == True:
@@ -179,34 +196,41 @@ class PdfGenome:
 
         # visited path in string, updated after each mutation on node
         visited_paths = set()
-        remaining_paths = list()
         remaining_paths = PdfGenome.get_object_paths(entry, visited_paths)
         trace = []
+        mut_count = 0
 
         ops = ['insert', 'swap', 'delete']
-        
+
         # TODO: replaced with a collection of visited path for determining next node that should visit. (breadth-first traversal)
-        while len(remaining_paths) > 0:
-            op_obj_path = remaining_paths.pop(0)
-            visited_paths.add(pickle.dumps(op_obj_path))
-            if random.uniform(0,1) <= mut_prob:
+        while len(remaining_paths) > 0 and mut_count < max_mut:
+            mut_count += 1
+            op_obj_path = random.choice(remaining_paths)
+            if random.uniform(0, 1) <= mut_prob:
                 op = random.choice(ops)
                 ext_id = random.choice(range(len(ext_genome)))
                 operation = (op, op_obj_path, ext_id)
-                trace.append(operation)
-                logger.debug("Perform %s" % str(operation))
+                succ = False
+                # logger.debug("Perform %s" % str(operation))
 
                 tgt_entry, tgt_obj_path = ext_genome[ext_id]
+                path_to_add = [op_obj_path]
 
                 if op == 'delete':
-                    PdfGenome.delete(entry, op_obj_path)
+                    succ = PdfGenome.delete(entry, op_obj_path)
                 elif op == 'insert':
-                    PdfGenome.insert(entry, op_obj_path, tgt_entry, tgt_obj_path)
+                    path_to_add.append(PdfGenome.insert(entry, op_obj_path, tgt_entry, tgt_obj_path))
+                    succ = True
                 elif op == 'swap':
                     PdfGenome.swap(entry, op_obj_path, tgt_entry, tgt_obj_path)
+                    succ = True
                 else:
                     logger.error("undefined operator: ", op)
 
+                if succ:
+                    trace.append(operation)
+                for i in path_to_add:
+                    visited_paths.add(PdfGenome.dump_path(i))
                 remaining_paths = PdfGenome.get_object_paths(entry, visited_paths)
         if entry.active_trace == None:
             entry.private.active_trace = trace
@@ -229,7 +253,7 @@ class PdfGenome:
 
         path_a = PdfGenome.get_crossover_point(c1)
         path_b = PdfGenome.get_crossover_point(c2)
-        
+
         if not path_a or not path_b:
             logger.error("###crossover failed due to null variant.")
             return c1, c2
@@ -246,9 +270,11 @@ class PdfGenome:
         parent_b[key_b] = obj_a
         return c1, c2
 
+
 # Parameters in a tuple.
 def _mutation(ntuples):
     return PdfGenome.mutation(*ntuples)
+
 
 # Test: A multiprocessing method with no requirement for pickable pdfrw objects.
 def _mutation_on_file(ntuples):
@@ -258,4 +284,3 @@ def _mutation_on_file(ntuples):
     mutated_pdf_obj = PdfGenome.mutation(pdf_obj, mut_prob, ext_genome)
     PdfGenome.save_to_file(mutated_pdf_obj, dst_path)
     return True
-
