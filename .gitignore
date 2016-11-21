@@ -1,0 +1,7 @@
+.idea/
+*.pyc
+MALWARE_PDF_PRE_04-2011_10982_files/
+PDF-Malware-Parser/
+pdfrw/
+results/
+venv/
